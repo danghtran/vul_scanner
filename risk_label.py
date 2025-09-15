@@ -1,38 +1,39 @@
+from cve_lookup import find_cves
+from cve_keyword_extract import generate_keywords
+
 def risk_from_findings(findings):
-    score = 0
-    notes = []
-    # open common service ports -> medium
-    open_ports = findings.get('open_ports', [])
-    if open_ports:
-        score += min(len(open_ports), 3)
-        notes.append(f'Open ports: {",".join(str(p) for p in open_ports)}')
+    # collect keywords from banners and hostname
+    #cve_keywords = set()
+    # for b in (findings.get('port_banners') or {}).values():
+    #     if b:
+    #         cve_keywords.add(' '.join(b.split())[:80])  # trim long banners
+    #         print(extract_keyword(b))
+    # tgt = findings.get('target')
+    # if tgt:
+    #     cve_keywords.add(str(tgt))
+    cve_keywords = generate_keywords(findings)
 
-    # expired or near-expiry cert -> +3
-    cert = findings.get('tls')
-    if cert:
-        if cert.get('days_left') is not None:
-            if cert['days_left'] < 0:
-                score += 4
-                notes.append('TLS certificate expired')
-            elif cert['days_left'] < 30:
-                score += 2
-                notes.append(f'TLS certificate expires in {cert["days_left"]} days')
+    aggregated_cves = []
+    highest_cvss = 0.0
+    for kw in cve_keywords:
+        try:
+            cves = find_cves(kw, max_results=5)
+        except Exception:
+            cves = []
+        for c in cves:
+            if not any(x['cve_id'] == c['cve_id'] for x in aggregated_cves):
+                aggregated_cves.append(c)
+                if c.get('cvss') is not None:
+                    try:
+                        highest_cvss = max(highest_cvss, float(c['cvss']))
+                    except Exception:
+                        pass
+        if len(aggregated_cves) >= 10:
+            break
 
+    findings['cves'] = aggregated_cves
 
-    # missing security headers -> +1 each
-    headers = findings.get('http_headers') or {}
-    missing = [h for h, v in headers.items() if not v]
-    score += len(missing)
-    if missing:
-        notes.append('Missing headers: ' + ','.join(missing))
-
-    # map numeric score to label
-    if score >= 6:
-        level = 'HIGH'
-    elif score >= 3:
-        level = 'MEDIUM'
-    else:
-        level = 'LOW'
-
-
-    return {'level': level, 'score': score, 'notes': notes}
+    return {
+        'highest_cvss': highest_cvss if aggregated_cves else None,
+        'cve_count': len(aggregated_cves)
+    }

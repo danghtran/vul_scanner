@@ -10,6 +10,7 @@ def scan_port(host, port, timeout=1.0):
             s.settimeout(0.8)
             banner = s.recv(1024)
             banner = banner.decode('utf-8', errors='ignore').strip()
+            print(banner)
         except Exception:
             banner = ''
         s.close()
