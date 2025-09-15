@@ -5,7 +5,7 @@ import json
 NVD_BASE = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 
 def _nvd_request(url):
-    req = urllib.request.Request(url, headers={'User-Agent': 'MVP-Scanner-CVE/1.0'})
+    req = urllib.request.Request(url, headers={'User-Agent': 'Vul-Scanner/1.0'})
     with urllib.request.urlopen(req, timeout=10) as resp:
         return json.load(resp)
 

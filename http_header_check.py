@@ -10,7 +10,7 @@ HEADER_CHECKS = [
 
 def check_http_headers(url):
     try:
-        req = request.Request(url, method='GET', headers={'User-Agent': 'MVP-Scanner/1.0'})
+        req = request.Request(url, method='GET', headers={'User-Agent': 'Vul-Scanner/1.0'})
         with request.urlopen(req, timeout=4) as resp:
             
             headers = {k: v for k, v in resp.getheaders()}
