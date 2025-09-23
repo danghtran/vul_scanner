@@ -1,5 +1,6 @@
 from cve_lookup import find_cves
 from cve_keyword_extract import generate_keywords
+from mistral_ai import cve_ai
 
 def risk_from_findings(findings):
     # collect keywords from banners and hostname
@@ -32,6 +33,7 @@ def risk_from_findings(findings):
             break
 
     findings['cves'] = aggregated_cves
+    findings['ai'] = cve_ai(cve_keywords)
 
     return {
         'highest_cvss': highest_cvss if aggregated_cves else None,
