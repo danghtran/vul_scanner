@@ -5,6 +5,7 @@ Read-only; size- and time-bounded.
 """
 import re
 import socket
+import time
 from typing import Any, Dict, List, Optional
 from urllib import error, request
 from urllib.parse import urljoin, urlparse
@@ -193,6 +194,9 @@ def gather_web_inventory(
     base_url: str,
     timeout: float = DEFAULT_TIMEOUT,
     max_body: int = BODY_MAX,
+    host: Optional[str] = None,
+    open_ports: Optional[List[int]] = None,
+    request_delay: float = 0,
 ) -> Optional[Dict[str, Any]]:
     """
     Fetch homepage (bounded body), Server / X-Powered-By, Set-Cookie flags,
@@ -207,6 +211,9 @@ def gather_web_inventory(
         base_url = base_url + "/"
     origin = f"{parsed.scheme}://{parsed.netloc}"
 
+    if request_delay > 0:
+        time.sleep(request_delay)
+
     inv: Dict[str, Any] = {
         "entry_url": base_url,
         "final_url": None,
@@ -220,6 +227,11 @@ def gather_web_inventory(
         "robots_txt": None,
         "security_txt": None,
         "fetch_error": None,
+        "redirect_trace": None,
+        "scheme_probes": None,
+        "hsts": None,
+        "cookie_audit": None,
+        "redirect_summary": None,
     }
 
     req = request.Request(base_url, headers={"User-Agent": USER_AGENT})
@@ -230,6 +242,13 @@ def gather_web_inventory(
             inv["server"] = resp.headers.get("Server")
             inv["x_powered_by"] = resp.headers.get("X-Powered-By")
             inv["cookies"] = _parse_cookies(resp.headers)
+            inv["hsts"] = None
+            try:
+                from http_transport import parse_hsts
+
+                inv["hsts"] = parse_hsts(resp.headers.get("Strict-Transport-Security"))
+            except ImportError:
+                pass
             raw = resp.read(max_body + 1)
             truncated = len(raw) > max_body
             if truncated:
@@ -256,18 +275,20 @@ def gather_web_inventory(
                 inv["server"] = e.headers.get("Server")
                 inv["x_powered_by"] = e.headers.get("X-Powered-By")
                 inv["cookies"] = _parse_cookies(e.headers)
+                try:
+                    from http_transport import parse_hsts
+
+                    inv["hsts"] = parse_hsts(e.headers.get("Strict-Transport-Security"))
+                except ImportError:
+                    pass
         except Exception:
             pass
     except Exception as e:
         inv["fetch_error"] = str(e)
 
-    https = _is_https_url(inv.get("final_url") or base_url)
-    for c in inv["cookies"]:
-        if https and c.get("name") and not c.get("secure"):
-            inv["cookies_missing_secure_on_https"] = True
-            break
-
     inv["robots_txt"] = _fetch_limited(urljoin(origin + "/", "robots.txt"), ROBOTS_MAX, timeout)
+    if request_delay > 0:
+        time.sleep(request_delay)
     sec_paths = (
         urljoin(origin + "/", ".well-known/security.txt"),
         urljoin(origin + "/", "security.txt"),
@@ -283,6 +304,25 @@ def gather_web_inventory(
         inv["security_txt"] = {"found": False, "attempted": list(sec_paths)}
 
     inv["cookie_count"] = len(inv.get("cookies") or [])
+
+    if host and open_ports is not None:
+        try:
+            from http_transport import merge_transport_into_inventory
+
+            merge_transport_into_inventory(inv, host, open_ports, timeout=timeout)
+        except ImportError:
+            https = _is_https_url(inv.get("final_url") or base_url)
+            for c in inv.get("cookies") or []:
+                if https and c.get("name") and not c.get("secure"):
+                    inv["cookies_missing_secure_on_https"] = True
+                    break
+    else:
+        https = _is_https_url(inv.get("final_url") or base_url)
+        for c in inv.get("cookies") or []:
+            if https and c.get("name") and not c.get("secure"):
+                inv["cookies_missing_secure_on_https"] = True
+                break
+
     return inv
 
 
@@ -294,10 +334,9 @@ def resolve_inventory_base_url(host: str, scheme: Optional[str], open_ports: Lis
         if not path.endswith("/"):
             path = path + "/"
         return f"{u.scheme}://{u.netloc}{path}"
-    if 443 in open_ports:
-        return f"https://{host}/"
-    if 80 in open_ports:
-        return f"http://{host}/"
+    for p, scheme in ((443, "https"), (8443, "https"), (8080, "http"), (8000, "http"), (8888, "http"), (80, "http")):
+        if p in open_ports:
+            return f"{scheme}://{host}/"
     return None
 
 
@@ -313,11 +352,22 @@ def slim_web_inventory_evidence(web: Dict[str, Any]) -> Dict[str, Any]:
         "generator",
         "tech_hints",
         "cookies_missing_secure_on_https",
+        "cookies_missing_httponly",
+        "cookies_missing_samesite",
+        "redirect_summary",
+        "hsts",
         "fetch_error",
     ):
         if k in web:
             r[k] = web[k]
     r["cookie_count"] = len(web.get("cookies") or [])
+    ca = web.get("cookie_audit")
+    if isinstance(ca, dict):
+        r["cookie_audit"] = {
+            "missing_secure": ca.get("missing_secure", [])[:5],
+            "missing_httponly": ca.get("missing_httponly", [])[:5],
+            "missing_samesite": ca.get("missing_samesite", [])[:5],
+        }
     rt = web.get("robots_txt")
     if isinstance(rt, dict):
         r["robots_txt"] = {

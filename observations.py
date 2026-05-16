@@ -1,9 +1,15 @@
 """Normalize raw scan artifacts into observations with NVD keyword provenance."""
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 from cve_keyword_extract import HEADER_TEMPLATES, PORT_PRODUCT_HINTS
 from inventory_context import slim_web_inventory_evidence
+from nvd_noise import (
+    CDN_WAF_MARKERS,
+    filter_banner_token,
+    scan_target_host,
+    stack_is_cdn_opaque,
+)
 from version_extract import parse_banner_version
 
 # Best keyword source wins for dedupe: higher index = stronger signal for validation
@@ -85,21 +91,50 @@ def _header_keywords(headers: dict) -> List[Tuple[str, str]]:
     return out
 
 
-def _port_keywords(port: int, banner: str) -> List[Tuple[str, str]]:
+_BANNER_NOISE = frozenset(
+    {
+        "ssh",
+        "http",
+        "https",
+        "ssl",
+        "tls",
+        "ubuntu",
+        "debian",
+        "linux",
+        "protocol",
+        "openssh",
+    }
+)
+
+
+def _port_keywords(
+    port: int,
+    banner: str,
+    *,
+    target_host: str = "",
+    cdn_opaque: bool = False,
+) -> List[Tuple[str, str]]:
     out: List[Tuple[str, str]] = []
-    for h in PORT_PRODUCT_HINTS.get(port, ()):
-        out.append((h, "port_hint"))
-    if banner:
-        bl = banner.lower()
-        for tok in re.findall(r"[a-z][a-z0-9+.-]{2,}", bl):
-            if len(tok) > 48:
-                continue
-            out.append((tok, "banner_token"))
-    pv = parse_banner_version(banner)
+    pv = parse_banner_version(banner) if banner else None
     if pv:
-        out.append((pv["product"], "version"))
-        combo = f"{pv['product']} {pv['version_token']}"
-        out.append((combo.strip(), "version"))
+        product = pv["product"]
+        ver = pv["version_token"]
+        out.append((f"{product} {ver}".strip(), "version"))
+        out.append((product, "version"))
+        m = re.match(r"(\d+\.\d+)", ver or "")
+        if m:
+            out.append((f"{product} {m.group(1)}", "version"))
+    elif not cdn_opaque:
+        hints = PORT_PRODUCT_HINTS.get(port, ())
+        if hints:
+            out.append((hints[0], "port_hint"))
+        if banner:
+            bl = banner.lower()
+            for tok in re.findall(r"[a-z][a-z0-9+.-]{2,}", bl):
+                if tok in _BANNER_NOISE:
+                    continue
+                if filter_banner_token(tok, target_host):
+                    out.append((tok, "banner_token"))
     return _merge_keyword_sources(out)
 
 
@@ -107,28 +142,56 @@ def _inventory_keywords(web: dict) -> List[Tuple[str, str]]:
     out: List[Tuple[str, str]] = []
     if not web:
         return out
+    seen_version: Set[str] = set()
+
+    def add_versioned(product: str, ver: str) -> None:
+        combo = f"{product} {ver}".strip()
+        if combo.lower() not in seen_version:
+            seen_version.add(combo.lower())
+            out.append((combo, "inventory"))
+        if product.lower() not in seen_version:
+            seen_version.add(product.lower())
+            out.append((product, "inventory"))
+        m = re.match(r"(\d+\.\d+)", ver or "")
+        if m:
+            minor = f"{product} {m.group(1)}"
+            if minor.lower() not in seen_version:
+                seen_version.add(minor.lower())
+                out.append((minor, "inventory"))
+
+    if web.get("server"):
+        pv = parse_banner_version(str(web["server"]))
+        if pv:
+            add_versioned(pv["product"], pv["version_token"])
+
     for h in web.get("tech_hints") or []:
+        pv = parse_banner_version(str(h))
+        if pv:
+            add_versioned(pv["product"], pv["version_token"])
+            continue
         t = str(h).strip()
-        if t:
+        if not t or len(t) > 80:
+            continue
+        tl = t.lower()
+        if tl in _BANNER_NOISE or tl in CDN_WAF_MARKERS or tl in seen_version:
+            continue
+        if "/" in t or re.search(r"\d+\.\d+", t):
             out.append((t, "inventory"))
+
     gen = web.get("generator")
     if gen:
-        g = str(gen).strip()
-        if g:
+        g = str(gen).strip()[:80]
+        if g and g.lower() not in seen_version:
             out.append((g, "inventory"))
-            for tok in g.split()[:5]:
-                x = tok.strip(".,;:|")
-                if len(x) > 2 and x.lower() not in ("and", "the", "http", "https"):
-                    out.append((x, "inventory"))
-    if web.get("cookies_missing_secure_on_https"):
-        for tpl in ("cookie secure flag", "session cookie without secure"):
-            out.append((tpl, "inventory"))
-    return out
+
+    return _merge_keyword_sources(out)
 
 
 def build_observations(findings: dict) -> List[Dict[str, Any]]:
     """Structured observations: each carries nvd_keywords as list of {keyword, source}."""
     observations: List[Dict[str, Any]] = []
+    target_host = scan_target_host(findings)
+    cdn_opaque = stack_is_cdn_opaque(findings)
     banners = findings.get("port_banners") or {}
 
     for p in findings.get("open_ports") or []:
@@ -138,7 +201,9 @@ def build_observations(findings: dict) -> List[Dict[str, Any]]:
             raw = banners.get(str(port))
         banner = raw or ""
         pv = parse_banner_version(banner) if banner else None
-        tuples_kw = _port_keywords(port, banner)
+        tuples_kw = _port_keywords(
+            port, banner, target_host=target_host, cdn_opaque=cdn_opaque
+        )
         nvd_keywords = [{"keyword": k, "source": s} for k, s in tuples_kw]
         observations.append(
             {
@@ -151,14 +216,18 @@ def build_observations(findings: dict) -> List[Dict[str, Any]]:
             }
         )
 
-    tls = findings.get("tls")
-    if tls:
+    tls_by_port = findings.get("tls_by_port") or {}
+    if not tls_by_port and findings.get("tls"):
+        tls_by_port = {443: findings.get("tls")}
+    for tls_port, tls in tls_by_port.items():
+        if not tls:
+            continue
         tls_tuples = _tls_keywords(tls)
         observations.append(
             {
-                "id": "tls-443",
+                "id": f"tls-{tls_port}",
                 "category": "tls_certificate",
-                "port": 443,
+                "port": int(tls_port),
                 "evidence": {k: v for k, v in tls.items() if k in _TLS_EVIDENCE_KEYS},
                 "parsed_version": None,
                 "nvd_keywords": [{"keyword": k, "source": s} for k, s in _merge_keyword_sources(tls_tuples)],
@@ -191,6 +260,11 @@ def build_observations(findings: dict) -> List[Dict[str, Any]]:
                     "ipv4": dns.get("ipv4"),
                     "ipv6": dns.get("ipv6"),
                     "error": dns.get("error"),
+                    "mx": (dns.get("mx") or [])[:8],
+                    "spf": dns.get("spf"),
+                    "dmarc": dns.get("dmarc"),
+                    "caa": (dns.get("caa") or [])[:6],
+                    "asset_context": dns.get("asset_context"),
                 },
                 "parsed_version": None,
                 "nvd_keywords": [],
@@ -200,13 +274,16 @@ def build_observations(findings: dict) -> List[Dict[str, Any]]:
     web = findings.get("web_inventory")
     if web:
         tuples = _inventory_keywords(web)
+        web_pv = None
+        if web.get("server"):
+            web_pv = parse_banner_version(str(web["server"]))
         observations.append(
             {
                 "id": "web-inventory",
                 "category": "web_inventory",
                 "port": None,
                 "evidence": slim_web_inventory_evidence(web),
-                "parsed_version": None,
+                "parsed_version": web_pv,
                 "nvd_keywords": [
                     {"keyword": k, "source": s} for k, s in _merge_keyword_sources(tuples)
                 ],

@@ -10,12 +10,12 @@ Use only on systems you are **authorized** to assess. NVD and CISA feeds are sub
 
 | Area | What it does |
 |------|----------------|
-| **Discovery** | TCP connect scan, optional banner read, **TLS assessment** on 443 (negotiated version/cipher, cert subject/issuer/SAN, expiry, hostname match, **TLS 1.0/1.1 acceptance probes**), HTTP security header checks when 80/443 is in scope. |
-| **Inventory / context** | **DNS** (A/AAAA) for the target; passive **web inventory**: homepage fetch (size-capped), `Server` / `X-Powered-By`, **Set-Cookie** flags, HTML **tech hints**, **`robots.txt`**, **`security.txt`**. |
+| **Discovery** | Parallel TCP scan with **port profiles** (`common` / `extended` / `full`), service **probes** (HTTP, SMTP, Redis, etc.), **TLS** on 443/8443/465/993/636 when open, HTTP checks on common web ports. |
+| **Inventory / context** | **DNS**: A/AAAA, **MX**, apex **TXT/SPF**, **`_dmarc`**, **CAA** (Google Public DNS JSON API). **HTTP transport**: **redirect chain**, **HSTS** parsing, **cookie** Secure/HttpOnly/SameSite audit; passive web inventory (`Server`, tech hints, `robots.txt`, `security.txt`). |
 | **Observations** | Normalizes probes into structured **observations** (TCP, TLS, HTTP headers, DNS, web inventory) with evidence and **keyword provenance** (`version`, `banner_token`, `port_hint`, `inventory`, `tls`, `header`). |
-| **NVD enrichment** | Keyword search against NVD CVE 2.0 API: **CVSS base score**, **vector string**, **severity**, summary, and NVD link. |
+| **NVD enrichment** | **Version-first** keyword selection (`openssh 6.6.1` before generic `ssh`); skips header/TLS template NVD queries when product versions are known. |
 | **Validation (confidence)** | Each CVE is labeled **`corroborated`**, **`potential`**, or **`heuristic`** from how the keyword was derived. |
-| **Threat context** | **CISA KEV** flag per CVE when the catalog loads (cached in-process). |
+| **Threat context** | **CISA KEV** flag per CVE; **FIRST EPSS** (exploit probability + percentile) via public API, folded into priority score and triage (`EPSS_ENABLED=0` to disable). |
 | **Triage** | **Configuration findings** (TLS failures, missing headers, cleartext HTTP, EOL OpenSSH, etc.) ranked with CVEs. **Relevance** (`high` / `medium` / `low`) filters noisy NVD hits (wrong product, generic header matches). Unified **`action_queue`** in JSON and report. |
 | **AI (optional)** | **Mistral** suggestions under `ai_suggestions` only—**advisory**, not used for scoring or validation. |
 
@@ -34,6 +34,9 @@ Use only on systems you are **authorized** to assess. NVD and CISA feeds are sub
 ### Scan a hostname or IP
 
 ```bash
+python main.py --target example.com --profile extended
+python main.py --target example.com --profile full --port-timeout 1.5
+python main.py --target example.com --stealth --profile common
 python main.py --target example.com --ports 22 80 443
 ```
 
@@ -69,7 +72,10 @@ python main.py --target example.com --output my_scan.json
 | Argument | Description |
 |----------|-------------|
 | `--target` | **Required.** Hostname, IP, or `http(s)://` URL. |
-| `--ports` | Optional space-separated TCP ports to probe. Default set includes 21, 22, 23, 25, 53, 80, 443, 3306, 3389, 8080 when omitted. |
+| `--ports` | Optional space-separated TCP ports (overrides `--profile`). |
+| `--profile` | `common` (~10), `extended` (~36, default), or `full` (~71) ports. |
+| `--port-timeout` | TCP connect timeout per port in seconds (default `1.0`). |
+| `--stealth` | Low-and-slow: sequential ports with random delays, minimal banners, fewer/throttled NVD queries. |
 | `--output` | JSON output file path (default: `scan_report.json`). |
 | `--internet-facing` | Raises priority scores when the asset is treated as internet-exposed. |
 | `--environment` | Context label (e.g. `prod`); `prod` adds a production weight in scoring. |
@@ -81,11 +87,12 @@ python main.py --target example.com --output my_scan.json
 | Field | Purpose |
 |-------|---------|
 | `observations` | Normalized evidence per port, TLS, headers, DNS, web inventory. |
-| `dns_context` | Resolved IPv4/IPv6 addresses. |
+| `dns_context` | IPv4/IPv6, MX, SPF, DMARC, CAA, `asset_context`. |
 | `web_inventory` | Passive HTTP fingerprint and discovery files. |
 | `tls` | Full TLS assessment result. |
 | `configuration_findings` | Actionable misconfigurations from the scan (not NVD). |
-| `vulnerabilities` / `cves` | All NVD keyword matches with scores and relevance. |
+| `vulnerabilities` / `cves` | All NVD keyword matches with scores, relevance, and **`epss` / `epss_percentile`**. |
+| `epss_status` | `ok`, `skipped`, `partial`, or `error` for the EPSS API batch. |
 | `cve_prioritized` | High/medium relevance CVEs (and KEV). |
 | `cve_low_confidence` | Likely false positives from generic keywords. |
 | `action_queue` | **Top items to fix first** (config + prioritized CVEs). |
@@ -102,8 +109,9 @@ python main.py --target example.com --output my_scan.json
 1. **Collect** — Ports, banners, TLS, headers, DNS, web inventory → **observations** with keyword provenance.
 2. **Enrich** — NVD keyword search per observation; **KEV** check per CVE ID.
 3. **Score** — CVSS, KEV, validation weight, and scan context (`--internet-facing`, `--environment prod`).
-4. **Relevance** — Compare CVE text to **detected products**; demote wrong-product and generic header-template matches.
-5. **Queue** — **Configuration findings** (e.g. missing HSTS, TLS handshake failure, EOL OpenSSH) are ranked **before** high-relevance CVEs in **`action_queue`**.
+4. **Relevance** — Compare CVE text to **detected products**; **version-aware** down-rank when installed banner version is newer than the CVE’s “before X” / “X and earlier” range.
+5. **EPSS** — [FIRST EPSS](https://www.first.org/epss/) scores boost priority; CVEs with **EPSS percentile >= 0.90** can stay in the prioritized set even when relevance is low (verify manually).
+6. **Queue** — **Configuration findings** ranked **before** high-relevance / high-EPSS CVEs in **`action_queue`**.
 
 ---
 
@@ -113,6 +121,7 @@ python main.py --target example.com --output my_scan.json
 - **CVE linkage** is **keyword-driven** against NVD, not a full CPE/version matrix or credentialed scanner replacement.
 - **Tech hints** and **relevance** are heuristics—always validate before patching.
 - **NVD**, **KEV**, and inventory HTTP fetches need outbound HTTPS; failures degrade gracefully.
+- **`--stealth`** spaces out ports, DNS, HTTP, and NVD calls to reduce burst traffic; it is **not** IDS/WAF evasion and still performs active probes on authorized targets only.
 
 ---
 
@@ -121,15 +130,22 @@ python main.py --target example.com --output my_scan.json
 | Module | Role |
 |--------|------|
 | `main.py` | CLI and scan orchestration. |
-| `port_scan.py` / `banner_parse.py` | TCP and banner normalization. |
+| `port_profiles.py` | Port lists per scan profile. |
+| `port_scan.py` / `banner_parse.py` | Parallel TCP scan, service probes, banners. |
 | `tls_check.py` | TLS handshake, cert fields, legacy protocol probes. |
 | `http_header_check.py` | Security header probes. |
-| `inventory_context.py` | DNS and passive web inventory. |
+| `dns_lookup.py` | Extended DNS (MX, SPF, DMARC, CAA). |
+| `http_transport.py` | Redirect chains, HSTS, cookie audit. |
+| `inventory_context.py` | Passive web inventory (uses `http_transport`). |
 | `observations.py` / `version_extract.py` | Observation model and banner version parsing. |
 | `cve_lookup.py` | NVD CVE 2.0 keyword search. |
 | `kev.py` | CISA KEV catalog lookup. |
-| `prioritize.py` | Base priority score and P1–P5 tiers. |
+| `epss.py` | FIRST EPSS batch lookup (in-process cache). |
+| `prioritize.py` | Base priority score and P1–P5 tiers (CVSS, KEV, EPSS). |
 | `risk_label.py` | Observations → NVD merge → triage pipeline. |
 | `triage.py` | Configuration findings, CVE relevance, action queue. |
+| `version_match.py` | Version-aware CVE applicability (banner vs CVE text). |
+| `keyword_select.py` | Priority ordering and filtering for NVD keyword queries. |
+| `stealth.py` | Low-and-slow timing options for `--stealth` scans. |
 | `report_gen.py` | JSON and text report writers. |
 | `mistral_ai.py` | Optional LLM helper (loads `api_key.env` if needed). |

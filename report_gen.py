@@ -15,6 +15,20 @@ def _cvss_line(c: dict) -> str:
     return " | ".join(parts) if parts else "CVSS n/a"
 
 
+def _epss_line(c: dict) -> str:
+    if c.get("epss_percentile") is not None:
+        try:
+            return f"EPSS pct {float(c['epss_percentile']):.2f}"
+        except (TypeError, ValueError):
+            pass
+    if c.get("epss") is not None:
+        try:
+            return f"EPSS {float(c['epss']):.3f}"
+        except (TypeError, ValueError):
+            pass
+    return ""
+
+
 def _queue_line(item: dict, index: int) -> List[str]:
     out = []
     kev = " [KEV]" if item.get("known_exploited") else ""
@@ -23,7 +37,9 @@ def _queue_line(item: dict, index: int) -> List[str]:
     rel = item.get("relevance", "")
     if item.get("item_type") == "cve":
         title = item.get("cve_id", "CVE")
-        out.append(f" {index}. {title} — {tier} (score {score}){kev} [{rel}]")
+        epss = _epss_line(item)
+        epss_tag = f" {epss}" if epss else ""
+        out.append(f" {index}. {title} — {tier} (score {score}){kev}{epss_tag} [{rel}]")
     else:
         title = item.get("title") or item.get("id", "config")
         sev = item.get("severity", "")
@@ -43,12 +59,29 @@ def generate_text_report(target, findings, out_path):
 
     r = findings.get("risk") or {}
     lines.append("\nTriage summary:")
+    if findings.get("stealth_mode"):
+        lines.append(" - Stealth mode: enabled (low-and-slow port scan, throttled enrichment)")
     lines.append(f" - Detected products: {', '.join(findings.get('detected_products') or []) or 'none'}")
+    cpe_q = findings.get("nvd_cpe_queries") or []
+    if cpe_q:
+        lines.append(f" - NVD CPE queries: {len(cpe_q)} ({', '.join(cpe_q[:2])}{'...' if len(cpe_q) > 2 else ''})")
     lines.append(f" - Configuration findings: {r.get('config_finding_count', 0)}")
     lines.append(f" - CVEs (prioritized): {r.get('cve_prioritized_count', 0)}")
     lines.append(f" - CVEs (low confidence): {r.get('cve_low_confidence_count', 0)}")
+    if r.get("version_not_applicable_count"):
+        lines.append(
+            f" - CVEs (version likely not applicable): {r['version_not_applicable_count']}"
+        )
+    iv = findings.get("installed_versions") or []
+    if iv:
+        vers = [f"{x.get('product')} {x.get('version_token')}" for x in iv[:6]]
+        lines.append(f" - Installed versions used: {', '.join(vers)}")
     if r.get("kev_count"):
         lines.append(f" - CISA KEV matches (prioritized): {r['kev_count']}")
+    if r.get("high_epss_count"):
+        lines.append(f" - High EPSS (percentile >= 0.85): {r['high_epss_count']}")
+    if findings.get("epss_status"):
+        lines.append(f" - EPSS feed: {findings.get('epss_status')}")
     tc = r.get("tier_counts") or {}
     if tc:
         parts = [f"{k}: {v}" for k, v in sorted(tc.items()) if v]
@@ -98,15 +131,37 @@ def generate_text_report(target, findings, out_path):
                 lines.append(f"     IPv4: {', '.join(ev['ipv4'])}")
             if ev.get("ipv6"):
                 lines.append(f"     IPv6: {', '.join(ev['ipv6'][:4])}")
+            if ev.get("mx"):
+                mxs = [f"{m.get('priority', '?')} {m.get('host', '')}" for m in ev["mx"][:4]]
+                lines.append(f"     MX: {', '.join(mxs)}")
+            if ev.get("spf"):
+                lines.append(f"     SPF: {str(ev['spf'])[:100]}")
+            if ev.get("dmarc"):
+                dm = ev["dmarc"]
+                lines.append(f"     DMARC policy: {dm.get('policy', '?')}")
             if ev.get("error"):
                 lines.append(f"     error: {ev.get('error')}")
         if cat == "web_inventory":
             th = ev.get("tech_hints") or []
             if th:
                 lines.append(f"     tech: {', '.join(str(x) for x in th[:10])}")
+            if ev.get("redirect_summary"):
+                lines.append(f"     redirects: {ev['redirect_summary'][:200]}")
+            if ev.get("hsts"):
+                h = ev["hsts"]
+                lines.append(f"     HSTS max-age: {h.get('max_age')}")
+
+    profile = findings.get("scan_profile")
+    scanned = findings.get("ports_scanned") or []
+    if profile or scanned:
+        lines.append("\nPort scan:")
+        if profile:
+            lines.append(f" - profile: {profile} ({len(scanned)} ports probed)")
+        open_n = len(findings.get("open_ports") or [])
+        lines.append(f" - open: {open_n}")
 
     lines.append("\nOpen ports:")
-    for p, b in (findings.get("port_banners") or {}).items():
+    for p, b in sorted((findings.get("port_banners") or {}).items(), key=lambda x: int(x[0])):
         lines.append(f" - {p}: open")
         if b:
             lines.append(f"   banner: {b}")
@@ -163,6 +218,25 @@ def generate_text_report(target, findings, out_path):
         lines.append(f" - IPv4: {', '.join(dc['ipv4'])}")
     if dc.get("ipv6"):
         lines.append(f" - IPv6: {', '.join(dc['ipv6'][:8])}")
+    if dc.get("mx"):
+        for m in dc["mx"][:6]:
+            lines.append(f" - MX: {m.get('priority')} {m.get('host')}")
+    if dc.get("spf"):
+        lines.append(f" - SPF: {str(dc['spf'])[:200]}")
+    if dc.get("dmarc"):
+        lines.append(f" - DMARC: p={dc['dmarc'].get('policy', '?')}")
+    elif dc.get("asset_context", {}).get("mail_surface"):
+        lines.append(" - DMARC: not found at _dmarc.<host>")
+    if dc.get("caa"):
+        for c in dc["caa"][:4]:
+            if c.get("tag"):
+                lines.append(f" - CAA: {c.get('tag')} {c.get('value', '')}")
+    ac = dc.get("asset_context") or {}
+    if ac:
+        lines.append(
+            f" - asset context: mail={ac.get('mail_surface')} "
+            f"spf={ac.get('has_spf')} dmarc={ac.get('has_dmarc')}"
+        )
 
     wi = findings.get("web_inventory")
     lines.append("\nWeb inventory (passive):")
@@ -175,6 +249,19 @@ def generate_text_report(target, findings, out_path):
             lines.append(f" - fetch error: {wi.get('fetch_error')}")
         if wi.get("final_url"):
             lines.append(f" - final URL: {wi.get('final_url')}")
+        if wi.get("redirect_summary"):
+            lines.append(f" - redirect chain: {wi.get('redirect_summary')}")
+        rt = wi.get("redirect_trace") or {}
+        if rt.get("chain") and len(rt["chain"]) > 1:
+            lines.append(f" - redirect hops: {rt.get('hop_count')}")
+        hsts = wi.get("hsts")
+        if hsts:
+            lines.append(
+                f" - HSTS: max-age={hsts.get('max_age')} "
+                f"includeSubDomains={hsts.get('include_subdomains')} preload={hsts.get('preload')}"
+            )
+        elif (wi.get("final_url") or "").lower().startswith("https://"):
+            lines.append(" - HSTS: not present on HTTPS response")
         if wi.get("http_status") is not None:
             lines.append(f" - HTTP status: {wi.get('http_status')}")
         if wi.get("server"):
@@ -191,6 +278,14 @@ def generate_text_report(target, findings, out_path):
             lines.append(f" - Set-Cookie count: {cc}")
         if wi.get("cookies_missing_secure_on_https"):
             lines.append(" - warning: cookie(s) without Secure flag on HTTPS")
+        if wi.get("cookies_missing_httponly"):
+            names = (wi.get("cookie_audit") or {}).get("missing_httponly", [])
+            if names:
+                lines.append(f" - warning: cookie(s) without HttpOnly: {', '.join(names[:5])}")
+        if wi.get("cookies_missing_samesite"):
+            names = (wi.get("cookie_audit") or {}).get("missing_samesite", [])
+            if names:
+                lines.append(f" - warning: cookie(s) without SameSite: {', '.join(names[:5])}")
         rt = wi.get("robots_txt") or {}
         if rt.get("ok"):
             prev = (rt.get("preview") or "").replace("\n", " ").strip()[:300]
@@ -213,9 +308,15 @@ def generate_text_report(target, findings, out_path):
             val = c.get("validation_status", "")
             rel = c.get("relevance", "")
             tier = c.get("priority_tier", "")
+            epss = _epss_line(c)
+            epss_s = f" | {epss}" if epss else ""
+            vm = c.get("version_match")
+            vm_s = f" ver={vm}" if vm and vm != "unknown" else ""
             lines.append(
-                f" - {c['cve_id']} [{tier}] rel={rel} val={val}{kev} — {_cvss_line(c)}"
+                f" - {c['cve_id']} [{tier}] rel={rel}{vm_s} val={val}{kev} — {_cvss_line(c)}{epss_s}"
             )
+            if c.get("version_match_reason"):
+                lines.append(f"     {c['version_match_reason']}")
             lines.append(f"     {c.get('relevance_reason', '')}")
             lines.append(f"     {c.get('nvd_url', '')}")
             if c.get("summary"):

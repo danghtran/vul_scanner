@@ -1,8 +1,15 @@
-from cve_lookup import find_cves
+import re
+from typing import List
+
+from cve_lookup import cpe_for_installed, find_cves, find_cves_by_cpe
 from kev import is_known_exploited
 from mistral_ai import cve_ai
+from keyword_select import iter_nvd_keyword_queries
 from observations import build_observations
+from nvd_noise import scan_target_host, stack_is_cdn_opaque
+from stealth import from_scan_context, nvd_pause
 from triage import build_triage
+from version_match import collect_installed_versions
 
 
 def _safe_ai_suggestions(keywords: list) -> dict:
@@ -31,10 +38,18 @@ def _merge_nvd_fields(dst: dict, src: dict) -> None:
         dst["severity"] = src.get("severity")
 
 
-def _rollup_validation(sources: set) -> str:
-    if sources & {"version", "banner_token"}:
+def _rollup_validation(sources: set, keywords_used: list = None) -> str:
+    kws = keywords_used or []
+    versionish = any(re.search(r"\d+\.\d+", k or "") for k in kws)
+    if "cpe" in sources:
         return "corroborated"
-    if "port_hint" in sources or "inventory" in sources:
+    if "version" in sources:
+        return "corroborated"
+    if "inventory" in sources and versionish:
+        return "corroborated"
+    if "banner_token" in sources and versionish:
+        return "corroborated"
+    if sources & {"inventory", "banner_token", "port_hint"}:
         return "potential"
     if sources & {"tls", "header"}:
         return "heuristic"
@@ -46,39 +61,85 @@ def risk_from_findings(findings: dict, scan_context=None):
     observations = build_observations(findings)
     findings["observations"] = observations
 
+    stealth_cfg = from_scan_context(ctx)
+    scan_target = scan_target_host(findings)
+    cdn_opaque = stack_is_cdn_opaque(findings)
     acc: dict = {}
-    max_queries = 40
+    max_queries = stealth_cfg.max_nvd_queries if stealth_cfg.enabled else 40
     queries = 0
-    max_cves = 55
+    max_cves = stealth_cfg.max_cves if stealth_cfg.enabled else 55
+    max_cpe_queries = 3 if stealth_cfg.enabled else 6
+    cpe_results_cap = 5 if stealth_cfg.enabled else 10
 
-    for obs in observations:
-        entries = (obs.get("nvd_keywords") or [])[:8]
-        for entry in entries:
-            if queries >= max_queries or len(acc) >= max_cves:
-                break
-            kw = entry.get("keyword")
-            src = entry.get("source") or "port_hint"
-            if not kw:
+    installed = collect_installed_versions(findings)
+    cpe_products: set = set()
+    cpe_queries_done: List[str] = []
+
+    for row in installed:
+        if len(cpe_queries_done) >= max_cpe_queries or len(acc) >= max_cves:
+            break
+        cpe = cpe_for_installed(row)
+        if not cpe or cpe in cpe_queries_done:
+            continue
+        cpe_queries_done.append(cpe)
+        prod = (row.get("product") or "").lower()
+        cpe_products.add(prod)
+        nvd_pause(stealth_cfg)
+        queries += 1
+        try:
+            batch = find_cves_by_cpe(cpe, max_results=cpe_results_cap, verbose=False)
+        except Exception:
+            batch = []
+        obs_id = row.get("observation_id") or "cpe-enrichment"
+        for c in batch:
+            cid = c.get("cve_id")
+            if not cid:
                 continue
-            # Header/TLS template keywords produce noisy NVD hits; triage scores them down.
-            queries += 1
-            try:
-                batch = find_cves(kw, max_results=5, verbose=False)
-            except Exception:
-                batch = []
-            for c in batch:
-                cid = c.get("cve_id")
-                if not cid:
-                    continue
-                if cid not in acc:
-                    acc[cid] = {**c, "hits": [], "sources": set()}
-                else:
-                    _merge_nvd_fields(acc[cid], c)
-                acc[cid]["hits"].append(
-                    {"observation_id": obs["id"], "keyword": kw, "source": src}
-                )
-                acc[cid]["sources"].add(src)
-        if queries >= max_queries or len(acc) >= max_cves:
+            if cid not in acc:
+                acc[cid] = {**c, "hits": [], "sources": set()}
+            else:
+                _merge_nvd_fields(acc[cid], c)
+            acc[cid]["hits"].append(
+                {"observation_id": obs_id, "keyword": cpe, "source": "cpe"}
+            )
+            acc[cid]["sources"].add("cpe")
+        if len(acc) >= max_cves:
+            break
+
+    findings["nvd_cpe_queries"] = list(cpe_queries_done)
+
+    for obs_id, kw, src in iter_nvd_keyword_queries(
+        observations,
+        max_queries=max_queries,
+        scan_target=scan_target,
+        cdn_opaque=cdn_opaque,
+    ):
+        if len(acc) >= max_cves:
+            break
+        if src == "version" and cpe_products:
+            lead = (kw.split(None, 1)[0] if kw else "").lower()
+            if lead in cpe_products:
+                continue
+        nvd_pause(stealth_cfg)
+        queries += 1
+        try:
+            max_results = 3 if stealth_cfg.enabled else 5
+            batch = find_cves(kw, max_results=max_results, verbose=False)
+        except Exception:
+            batch = []
+        for c in batch:
+            cid = c.get("cve_id")
+            if not cid:
+                continue
+            if cid not in acc:
+                acc[cid] = {**c, "hits": [], "sources": set()}
+            else:
+                _merge_nvd_fields(acc[cid], c)
+            acc[cid]["hits"].append(
+                {"observation_id": obs_id, "keyword": kw, "source": src}
+            )
+            acc[cid]["sources"].add(src)
+        if len(acc) >= max_cves:
             break
 
     raw_vulns = []
@@ -87,7 +148,7 @@ def risk_from_findings(findings: dict, scan_context=None):
         hits = row.pop("hits")
         obs_ids = sorted({h["observation_id"] for h in hits})
         kws_used = sorted({h["keyword"] for h in hits})
-        val = _rollup_validation(sources)
+        val = _rollup_validation(sources, kws_used)
         raw_vulns.append(
             {
                 **row,
@@ -112,19 +173,42 @@ def risk_from_findings(findings: dict, scan_context=None):
     findings["action_queue"] = triage["action_queue"]
     findings["remediation_queue"] = triage["remediation_queue"]
     findings["detected_products"] = triage["detected_products"]
+    findings["installed_versions"] = triage.get("installed_versions") or []
+    findings["epss_status"] = triage.get("epss_status")
+    if triage.get("epss_error"):
+        findings["epss_error"] = triage.get("epss_error")
 
-    ai_kw = sorted(
-        {e["keyword"] for obs in observations for e in (obs.get("nvd_keywords") or [])}
-    )[:28]
+    ai_kw = []
+    seen_ai: set = set()
+    for _oid, kw, _src in iter_nvd_keyword_queries(
+        observations,
+        max_queries=20,
+        scan_target=scan_target,
+        cdn_opaque=cdn_opaque,
+    ):
+        if kw.lower() not in seen_ai:
+            seen_ai.add(kw.lower())
+            ai_kw.append(kw)
+    ai_kw = ai_kw[:28]
     findings["ai_suggestions"] = _safe_ai_suggestions(ai_kw)
 
     vulnerabilities = triage["vulnerabilities"]
     prioritized = triage["cve_prioritized"]
     highest_cvss = None
     kev_count = 0
+    high_epss_count = 0
+    version_not_applicable_count = 0
+    for v in vulnerabilities:
+        if v.get("version_match") == "not_applicable":
+            version_not_applicable_count += 1
     for v in prioritized:
         if v.get("known_exploited"):
             kev_count += 1
+        try:
+            if v.get("epss_percentile") is not None and float(v["epss_percentile"]) >= 0.85:
+                high_epss_count += 1
+        except (TypeError, ValueError):
+            pass
         if v.get("cvss") is not None:
             try:
                 f = float(v["cvss"])
@@ -144,6 +228,9 @@ def risk_from_findings(findings: dict, scan_context=None):
         "config_finding_count": len(triage["configuration_findings"]),
         "action_queue_count": len(triage["action_queue"]),
         "kev_count": kev_count,
+        "high_epss_count": high_epss_count,
+        "version_not_applicable_count": version_not_applicable_count,
+        "epss_status": triage.get("epss_status"),
         "highest_tier": top_tier,
         "tier_counts": triage["tier_counts"],
         "detected_products": triage["detected_products"],

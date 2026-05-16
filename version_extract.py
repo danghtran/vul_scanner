@@ -32,4 +32,20 @@ def parse_banner_version(banner: str) -> Optional[Dict[str, Any]]:
     if m:
         return {"product": "mysql", "version_token": m.group(1), "confidence": "banner_regex"}
 
+    m = re.search(r"PostgreSQL\s+([\d.]+)", b, re.I)
+    if m:
+        return {"product": "postgresql", "version_token": m.group(1), "confidence": "banner_regex"}
+
+    m = re.search(r"redis_version:([\d.]+)", b, re.I)
+    if m:
+        return {"product": "redis", "version_token": m.group(1), "confidence": "banner_regex"}
+
+    m = re.search(r"Microsoft SQL Server\s+([\d.]+)", b, re.I)
+    if m:
+        return {"product": "mssql", "version_token": m.group(1), "confidence": "banner_regex"}
+
+    m = re.search(r"220[ -](\S+)\s+FTP", b, re.I)
+    if m:
+        return {"product": "ftp", "version_token": m.group(1), "confidence": "banner_regex"}
+
     return None

@@ -4,7 +4,9 @@ Triage: configuration findings, CVE relevance scoring, unified action queue.
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from nvd_noise import summary_conflicts_with_products
 from prioritize import build_rationale, compute_priority_score, tier_from_score
+from version_match import assess_version_match, collect_installed_versions
 
 # Products seen in CVE text that conflict with detected stack (keyword noise)
 _UNRELATED_PRODUCTS = frozenset(
@@ -27,6 +29,16 @@ _UNRELATED_PRODUCTS = frozenset(
         "wu-ftpd",
         "wuftpd",
         "util-linux",
+        "apache cxf",
+        "cxf",
+        "groovy",
+        "windowmaker",
+        "wmaker",
+        "internet explorer",
+        "outlook express",
+        "microsoft jet",
+        "digi-news",
+        "digi-ads",
     }
 )
 
@@ -99,7 +111,11 @@ def _summary_mentions_unrelated(summary: str, products: Set[str]) -> bool:
     return False
 
 
-def assess_cve_relevance(cve: dict, products: Set[str]) -> Tuple[str, str]:
+def assess_cve_relevance(
+    cve: dict,
+    products: Set[str],
+    installed_versions: Optional[List[dict]] = None,
+) -> Tuple[str, str]:
     """
     Returns (relevance: high|medium|low, reason).
     """
@@ -107,8 +123,31 @@ def assess_cve_relevance(cve: dict, products: Set[str]) -> Tuple[str, str]:
     val = cve.get("validation_status") or "potential"
     sources = {h.get("source") for h in (cve.get("evidence_hits") or []) if h.get("source")}
 
+    v_match, v_reason = assess_version_match(cve, installed_versions or [])
+    if v_match == "not_applicable":
+        return "low", v_reason
+
     if not summary:
         return "low", "no CVE description to validate product match"
+
+    if products and summary_conflicts_with_products(summary, products):
+        return "low", "CVE description targets a different product line than observed on host"
+
+    if not products:
+        if v_match != "likely_affected":
+            if sources <= {"header", "tls", "port_hint", "banner_token"} or val == "heuristic":
+                return "low", "no product/version fingerprint; generic keyword association"
+            if val == "corroborated":
+                return "low", "keyword matched without observed product version on host"
+
+    if "cpe" in sources and v_match == "likely_affected" and v_reason:
+        return "high", f"NVD CPE match for installed version; {v_reason}"
+
+    if v_match == "likely_affected" and v_reason:
+        if val == "corroborated":
+            return "high", v_reason
+        if products and _summary_mentions_product(summary, products):
+            return "medium", v_reason
 
     if products and _summary_mentions_unrelated(summary, products):
         return "low", "CVE description targets a different product than observed on host"
@@ -122,8 +161,10 @@ def assess_cve_relevance(cve: dict, products: Set[str]) -> Tuple[str, str]:
             return "high", "banner or version evidence aligns with CVE affected product"
         return "medium", "CVE description references observed product; confirm version range"
 
-    if val == "corroborated":
+    if val == "corroborated" and products:
         return "medium", "strong keyword match; verify CVE applies to installed version"
+    if val == "corroborated":
+        return "low", "keyword matched without observed product version on host"
 
     if "port_hint" in sources and not products:
         return "low", "generic port-based keyword only"
@@ -135,13 +176,56 @@ def _relevance_multiplier(relevance: str) -> float:
     return {"high": 1.0, "medium": 0.72, "low": 0.35}.get(relevance, 0.35)
 
 
-def enrich_cve_triage(cve: dict, products: Set[str], ctx: dict) -> dict:
-    relevance, rel_reason = assess_cve_relevance(cve, products)
+def _epss_promotes_despite_low_relevance(cve: dict, products: Optional[Set[str]] = None) -> bool:
+    if cve.get("version_match") == "not_applicable" and not cve.get("known_exploited"):
+        return False
+    if cve.get("relevance") == "low":
+        rr = (cve.get("relevance_reason") or "").lower()
+        if any(
+            x in rr
+            for x in (
+                "different product line",
+                "generic keyword",
+                "no product/version fingerprint",
+                "false positive",
+                "without observed product",
+            )
+        ):
+            return bool(cve.get("known_exploited"))
+    if not products and cve.get("version_match") != "likely_affected":
+        if not cve.get("known_exploited"):
+            return False
+    if cve.get("known_exploited"):
+        return True
+    try:
+        p = float(cve.get("epss_percentile"))
+        return p >= 0.90
+    except (TypeError, ValueError):
+        pass
+    try:
+        s = float(cve.get("epss"))
+        return s >= 0.65
+    except (TypeError, ValueError):
+        return False
+
+
+def enrich_cve_triage(
+    cve: dict,
+    products: Set[str],
+    ctx: dict,
+    installed_versions: Optional[List[dict]] = None,
+) -> dict:
+    v_match, v_reason = assess_version_match(cve, installed_versions or [])
+    relevance, rel_reason = assess_cve_relevance(cve, products, installed_versions)
+    epss_score = cve.get("epss")
+    epss_pct = cve.get("epss_percentile")
     base = compute_priority_score(
         cve.get("cvss"),
         cve.get("known_exploited"),
         cve.get("validation_status"),
         ctx,
+        epss_score=epss_score,
+        epss_percentile=epss_pct,
     )
     adjusted = round(base * _relevance_multiplier(relevance), 2)
     tier = tier_from_score(adjusted)
@@ -150,9 +234,13 @@ def enrich_cve_triage(cve: dict, products: Set[str], ctx: dict) -> dict:
         cve.get("known_exploited"),
         cve.get("validation_status"),
         ctx,
+        epss_score=epss_score,
+        epss_percentile=epss_pct,
     )
     rationale = f"{rationale}; relevance: {relevance} ({rel_reason})"
     out = {**cve}
+    out["version_match"] = v_match
+    out["version_match_reason"] = v_reason or None
     out["relevance"] = relevance
     out["relevance_reason"] = rel_reason
     out["priority_score"] = adjusted
@@ -160,10 +248,22 @@ def enrich_cve_triage(cve: dict, products: Set[str], ctx: dict) -> dict:
     out["priority_rationale"] = rationale
     if relevance == "high" and cve.get("known_exploited"):
         out["recommended_action"] = "Patch or mitigate immediately; CISA KEV with strong product match"
+    elif epss_pct is not None and float(epss_pct) >= 0.85:
+        out["recommended_action"] = (
+            "High EPSS exploitation probability; validate applicability and patch urgently"
+        )
     elif relevance == "high":
         out["recommended_action"] = "Validate affected component version, then patch per vendor advisory"
     elif relevance == "medium":
         out["recommended_action"] = "Confirm version in banner or inventory, then prioritize patch if in range"
+    elif v_match == "not_applicable":
+        out["recommended_action"] = (
+            "Likely not applicable to installed version; confirm in vendor advisory before patching"
+        )
+    elif _epss_promotes_despite_low_relevance(cve, products):
+        out["recommended_action"] = (
+            "Weak product match but elevated EPSS/KEV; verify component before deprioritizing"
+        )
     else:
         out["recommended_action"] = "Review manually; likely false positive from keyword search"
     return out
@@ -343,7 +443,7 @@ def build_config_findings(findings: dict, ctx: dict) -> List[dict]:
         items.append(
             _cfg_item(
                 "cfg-cookie-secure",
-                "Session cookie missing Secure flag on HTTPS",
+                "Cookie missing Secure flag on HTTPS",
                 "high",
                 110.0 + extra,
                 "Set Secure (and HttpOnly) on authentication cookies",
@@ -351,6 +451,101 @@ def build_config_findings(findings: dict, ctx: dict) -> List[dict]:
                 {"cookies": wi.get("cookies")},
             )
         )
+    ca = wi.get("cookie_audit") or {}
+    if ca.get("missing_httponly"):
+        items.append(
+            _cfg_item(
+                "cfg-cookie-httponly",
+                f"Cookie(s) missing HttpOnly: {', '.join(ca['missing_httponly'][:5])}",
+                "medium",
+                78.0 + extra,
+                "Set HttpOnly on session and sensitive cookies",
+                ["web-inventory"],
+                {"names": ca["missing_httponly"][:10]},
+            )
+        )
+    if ca.get("missing_samesite"):
+        items.append(
+            _cfg_item(
+                "cfg-cookie-samesite",
+                f"Cookie(s) missing SameSite: {', '.join(ca['missing_samesite'][:5])}",
+                "medium",
+                72.0 + extra,
+                "Set SameSite=Lax or Strict on cookies",
+                ["web-inventory"],
+                {"names": ca["missing_samesite"][:10]},
+            )
+        )
+
+    final_url = wi.get("final_url") or ""
+    final = final_url.lower()
+    https_final = final.startswith("https://")
+    hsts = wi.get("hsts")
+    if https_final and not hsts:
+        items.append(
+            _cfg_item(
+                "cfg-hsts-missing",
+                "HTTPS response without Strict-Transport-Security",
+                "high",
+                105.0 + extra,
+                "Add HSTS with suitable max-age (consider includeSubDomains after testing)",
+                ["web-inventory"],
+                {"final_url": final_url},
+            )
+        )
+    elif hsts and hsts.get("max_age") is not None and int(hsts["max_age"]) < 86400:
+        items.append(
+            _cfg_item(
+                "cfg-hsts-weak",
+                f"HSTS max-age is low ({hsts.get('max_age')} seconds)",
+                "low",
+                55.0 + extra,
+                "Increase HSTS max-age (common baseline: 31536000)",
+                ["web-inventory"],
+                {"hsts": hsts},
+            )
+        )
+
+    dns = findings.get("dns_context") or {}
+    ac = dns.get("asset_context") or {}
+    if ac.get("mail_surface"):
+        if not ac.get("has_spf"):
+            items.append(
+                _cfg_item(
+                    "cfg-dns-spf-missing",
+                    "MX records present but no SPF TXT record found",
+                    "medium",
+                    80.0 + extra,
+                    "Publish SPF (v=spf1) TXT at the domain apex",
+                    ["dns-host"],
+                    {"mx": dns.get("mx", [])[:5]},
+                )
+            )
+        if not ac.get("has_dmarc"):
+            items.append(
+                _cfg_item(
+                    "cfg-dns-dmarc-missing",
+                    "MX records present but no DMARC record at _dmarc",
+                    "medium",
+                    82.0 + extra,
+                    "Publish DMARC (v=DMARC1) at _dmarc.<domain>",
+                    ["dns-host"],
+                    {"mx": dns.get("mx", [])[:5]},
+                )
+            )
+        elif ac.get("dmarc_policy") == "none":
+            items.append(
+                _cfg_item(
+                    "cfg-dns-dmarc-none",
+                    "DMARC policy is p=none (monitoring only)",
+                    "low",
+                    50.0 + extra,
+                    "Tighten DMARC to quarantine or reject when ready",
+                    ["dns-host"],
+                    {"dmarc": dns.get("dmarc")},
+                )
+            )
+
     final = (wi.get("final_url") or "").lower()
     if final.startswith("http://") and 443 not in (findings.get("open_ports") or []):
         items.append(
@@ -402,18 +597,27 @@ def build_config_findings(findings: dict, ctx: dict) -> List[dict]:
 
 
 def build_triage(findings: dict, vulnerabilities: List[dict], ctx: dict) -> dict:
+    from epss import attach_epss_to_cve, fetch_epss_scores
+
     products = _detected_products(findings)
+    installed_versions = collect_installed_versions(findings)
     config_items = build_config_findings(findings, ctx)
+
+    cve_ids = [v.get("cve_id") for v in vulnerabilities if v.get("cve_id")]
+    epss_result = fetch_epss_scores(cve_ids)
+    epss_scores = epss_result.get("scores") or {}
 
     enriched: List[dict] = []
     high_med: List[dict] = []
     low_conf: List[dict] = []
 
     for cve in vulnerabilities:
-        row = enrich_cve_triage(cve, products, ctx)
+        cid = (cve.get("cve_id") or "").upper()
+        attach_epss_to_cve(cve, epss_scores.get(cid))
+        row = enrich_cve_triage(cve, products, ctx, installed_versions)
         row["item_type"] = "cve"
         enriched.append(row)
-        if row["relevance"] == "low" and not row.get("known_exploited"):
+        if row["relevance"] == "low" and not _epss_promotes_despite_low_relevance(row, products):
             low_conf.append(row)
         else:
             high_med.append(row)
@@ -446,6 +650,11 @@ def build_triage(findings: dict, vulnerabilities: List[dict], ctx: dict) -> dict
                         "severity",
                         "validation_status",
                         "known_exploited",
+                        "epss",
+                        "epss_percentile",
+                        "epss_date",
+                        "version_match",
+                        "version_match_reason",
                         "relevance",
                         "relevance_reason",
                         "priority_score",
@@ -474,6 +683,7 @@ def build_triage(findings: dict, vulnerabilities: List[dict], ctx: dict) -> dict
 
     return {
         "detected_products": sorted(products),
+        "installed_versions": installed_versions,
         "configuration_findings": config_items,
         "vulnerabilities": enriched,
         "cve_prioritized": high_med,
@@ -481,4 +691,6 @@ def build_triage(findings: dict, vulnerabilities: List[dict], ctx: dict) -> dict
         "action_queue": action_queue,
         "remediation_queue": remediation_queue,
         "tier_counts": tier_counts,
+        "epss_status": epss_result.get("status"),
+        "epss_error": epss_result.get("error"),
     }
