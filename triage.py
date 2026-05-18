@@ -52,6 +52,9 @@ _PRODUCT_ALIASES = {
     "mariadb": ("mysql", "mariadb"),
     "openssl": ("openssl",),
     "iis": ("iis", "internet information services"),
+    "tomcat": ("tomcat", "apache tomcat", "apache-coyote"),
+    "postfix": ("postfix",),
+    "vsftpd": ("vsftpd", "vsftp"),
 }
 
 
@@ -628,7 +631,8 @@ def build_triage(findings: dict, vulnerabilities: List[dict], ctx: dict) -> dict
     action_queue: List[dict] = []
     for item in sorted(config_items, key=lambda x: -x["priority_score"]):
         action_queue.append(item)
-    for item in high_med[:20]:
+    max_cve_in_queue = 12
+    for item in high_med[:max_cve_in_queue]:
         action_queue.append(item)
     action_queue = action_queue[:25]
 

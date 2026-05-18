@@ -44,6 +44,26 @@ def parse_banner_version(banner: str) -> Optional[Dict[str, Any]]:
     if m:
         return {"product": "mssql", "version_token": m.group(1), "confidence": "banner_regex"}
 
+    m = re.search(r"vsftpd\s+([\d.]+)", b, re.I)
+    if m:
+        return {"product": "vsftpd", "version_token": m.group(1), "confidence": "banner_regex"}
+
+    m = re.search(r"(?:Apache-Coyote|Tomcat)/([\d.]+)", b, re.I)
+    if m:
+        return {"product": "tomcat", "version_token": m.group(1), "confidence": "banner_regex"}
+
+    m = re.search(r"Postfix", b, re.I)
+    if m:
+        vm = re.search(r"Postfix\s*\(([^)]+)\)", b, re.I)
+        if vm:
+            vm2 = re.search(r"([\d.]+)", vm.group(1))
+            if vm2:
+                return {
+                    "product": "postfix",
+                    "version_token": vm2.group(1),
+                    "confidence": "banner_regex",
+                }
+
     m = re.search(r"220[ -](\S+)\s+FTP", b, re.I)
     if m:
         return {"product": "ftp", "version_token": m.group(1), "confidence": "banner_regex"}

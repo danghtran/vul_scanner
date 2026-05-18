@@ -27,6 +27,9 @@ _PRODUCT_IN_SUMMARY = {
     "mysql": (r"\bmysql", r"\bmariadb"),
     "iis": (r"\biis\b", r"internet information services"),
     "openssl": (r"\bopenssl",),
+    "tomcat": (r"\btomcat", r"apache-coyote", r"apache tomcat"),
+    "postfix": (r"\bpostfix",),
+    "vsftpd": (r"\bvsftpd", r"\bvsftp",),
 }
 
 

@@ -1,4 +1,5 @@
 import argparse
+import re
 from datetime import datetime, timezone
 
 from banner_parse import parse_banner
@@ -31,6 +32,24 @@ def normalize_target(target, ports):
     else:
         # Just a host/IP
         return target, ports, None
+
+
+def _http_probe_host(target: str, connect_host: str) -> str:
+    """Host header for HTTP probes: prefer logical hostname over connect IP."""
+    raw = (target or "").strip()
+    if raw.startswith("http"):
+        parsed = urlparse(raw)
+        if parsed.hostname:
+            return parsed.hostname
+    name = raw.split("://")[-1].split("/")[0].split("@")[-1]
+    if ":" in name and not name.startswith("["):
+        host_part, _, port_part = name.rpartition(":")
+        if port_part.isdigit():
+            name = host_part
+    name = name.rstrip(".")
+    if name and not re.match(r"^[\d.a-fA-F:]+$", name):
+        return name
+    return connect_host
 
 
 def _pick_http_url(host: str, scheme: str | None, open_ports: list) -> str | None:
@@ -74,8 +93,14 @@ def run_scan(target, ports, scan_context=None, profile=None, port_timeout=1.0, s
         findings["stealth_settings"] = stealth_cfg.to_dict()
     open_ports = []
 
+    http_vhost = _http_probe_host(target, host)
+    findings["http_probe_host"] = http_vhost
     scan_results = scan_ports(
-        host, ports_list, timeout=effective_timeout, stealth=stealth_cfg
+        host,
+        ports_list,
+        timeout=effective_timeout,
+        stealth=stealth_cfg,
+        http_host=http_vhost,
     )
     for p in ports_list:
         row = scan_results.get(p) or {}

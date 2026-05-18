@@ -1,7 +1,17 @@
 import re
 from typing import List
 
-from cve_lookup import cpe_for_installed, find_cves, find_cves_by_cpe
+from cve_lookup import (
+    CPE_KEEP_PER_PRODUCT,
+    CPE_KEEP_STEALTH,
+    CPE_NVD_FETCH_MAX,
+    consume_nvd_fetch_stats,
+    cpe_for_installed,
+    find_cves,
+    find_cves_by_cpe,
+    reset_nvd_fetch_stats,
+    select_cpe_cves,
+)
 from kev import is_known_exploited
 from mistral_ai import cve_ai
 from keyword_select import iter_nvd_keyword_queries
@@ -62,6 +72,7 @@ def risk_from_findings(findings: dict, scan_context=None):
     findings["observations"] = observations
 
     stealth_cfg = from_scan_context(ctx)
+    reset_nvd_fetch_stats()
     scan_target = scan_target_host(findings)
     cdn_opaque = stack_is_cdn_opaque(findings)
     acc: dict = {}
@@ -69,11 +80,20 @@ def risk_from_findings(findings: dict, scan_context=None):
     queries = 0
     max_cves = stealth_cfg.max_cves if stealth_cfg.enabled else 55
     max_cpe_queries = 3 if stealth_cfg.enabled else 6
-    cpe_results_cap = 5 if stealth_cfg.enabled else 10
+    cpe_keep = CPE_KEEP_STEALTH if stealth_cfg.enabled else CPE_KEEP_PER_PRODUCT
+    cpe_fetch = min(CPE_NVD_FETCH_MAX, 20 if stealth_cfg.enabled else CPE_NVD_FETCH_MAX)
 
     installed = collect_installed_versions(findings)
     cpe_products: set = set()
     cpe_queries_done: List[str] = []
+    cpe_stats = {
+        "queries": 0,
+        "fetched": 0,
+        "kept": 0,
+        "dropped_version": 0,
+        "dropped_stale_low": 0,
+        "keep_per_product": cpe_keep,
+    }
 
     for row in installed:
         if len(cpe_queries_done) >= max_cpe_queries or len(acc) >= max_cves:
@@ -86,10 +106,21 @@ def risk_from_findings(findings: dict, scan_context=None):
         cpe_products.add(prod)
         nvd_pause(stealth_cfg)
         queries += 1
+        cpe_stats["queries"] += 1
         try:
-            batch = find_cves_by_cpe(cpe, max_results=cpe_results_cap, verbose=False)
+            batch = find_cves_by_cpe(cpe, max_results=cpe_fetch, verbose=False)
         except Exception:
             batch = []
+        for c in batch:
+            c["known_exploited"] = is_known_exploited(c.get("cve_id", ""))
+            c["cpe_product"] = prod
+        batch, st = select_cpe_cves(
+            batch, max_keep=cpe_keep, installed=installed
+        )
+        cpe_stats["fetched"] += st.get("fetched", 0)
+        cpe_stats["kept"] += st.get("kept", 0)
+        cpe_stats["dropped_version"] += st.get("dropped_version", 0)
+        cpe_stats["dropped_stale_low"] += st.get("dropped_stale_low", 0)
         obs_id = row.get("observation_id") or "cpe-enrichment"
         for c in batch:
             cid = c.get("cve_id")
@@ -107,6 +138,7 @@ def risk_from_findings(findings: dict, scan_context=None):
             break
 
     findings["nvd_cpe_queries"] = list(cpe_queries_done)
+    findings["nvd_cpe_stats"] = cpe_stats
 
     for obs_id, kw, src in iter_nvd_keyword_queries(
         observations,
@@ -164,6 +196,7 @@ def risk_from_findings(findings: dict, scan_context=None):
         v["known_exploited"] = is_known_exploited(v.get("cve_id", ""))
 
     triage = build_triage(findings, raw_vulns, ctx)
+    findings["nvd_fetch_stats"] = consume_nvd_fetch_stats()
 
     findings["configuration_findings"] = triage["configuration_findings"]
     findings["vulnerabilities"] = triage["vulnerabilities"]

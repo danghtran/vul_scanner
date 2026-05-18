@@ -63,8 +63,23 @@ def generate_text_report(target, findings, out_path):
         lines.append(" - Stealth mode: enabled (low-and-slow port scan, throttled enrichment)")
     lines.append(f" - Detected products: {', '.join(findings.get('detected_products') or []) or 'none'}")
     cpe_q = findings.get("nvd_cpe_queries") or []
+    cpe_st = findings.get("nvd_cpe_stats") or {}
     if cpe_q:
         lines.append(f" - NVD CPE queries: {len(cpe_q)} ({', '.join(cpe_q[:2])}{'...' if len(cpe_q) > 2 else ''})")
+    if cpe_st.get("fetched"):
+        lines.append(
+            f" - NVD CPE results: kept {cpe_st.get('kept', 0)} of {cpe_st.get('fetched', 0)} "
+            f"(cap {cpe_st.get('keep_per_product', '?')}/product; "
+            f"dropped version={cpe_st.get('dropped_version', 0)}, "
+            f"stale/low={cpe_st.get('dropped_stale_low', 0)})"
+        )
+    nvd_st = findings.get("nvd_fetch_stats") or {}
+    if nvd_st.get("requests") or nvd_st.get("cache_hits"):
+        lines.append(
+            f" - NVD API: {nvd_st.get('requests', 0)} request(s), "
+            f"cache hits {nvd_st.get('cache_hits', 0)}, "
+            f"retries {nvd_st.get('retries', 0)}, errors {nvd_st.get('errors', 0)}"
+        )
     lines.append(f" - Configuration findings: {r.get('config_finding_count', 0)}")
     lines.append(f" - CVEs (prioritized): {r.get('cve_prioritized_count', 0)}")
     lines.append(f" - CVEs (low confidence): {r.get('cve_low_confidence_count', 0)}")
