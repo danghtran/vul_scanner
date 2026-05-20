@@ -9,7 +9,7 @@ from inventory_context import gather_web_inventory, resolve_inventory_base_url
 from port_profiles import DEFAULT_PROFILE, HTTP_PROBE_PORTS, TLS_PROBE_PORTS, ports_for_profile
 from port_scan import scan_ports
 from risk_label import risk_from_findings
-from report_gen import generate_text_report, save_json
+from report_gen import default_demo_paths, generate_text_report, save_json
 from stealth import StealthConfig, from_scan_context, phase_pause
 from tls_check import check_tls_cert
 
@@ -186,7 +186,21 @@ def main():
         default=1.0,
         help='TCP connect timeout per port in seconds (default 1.0)',
     )
-    parser.add_argument('--output', default='scan_report.json', help='JSON output path')
+    parser.add_argument(
+        '--output',
+        default=None,
+        help='JSON output path (default: demo/<target>_scan.json)',
+    )
+    parser.add_argument(
+        '--report',
+        default=None,
+        help='Text report path (default: demo/<target>_report.txt)',
+    )
+    parser.add_argument(
+        '--demo-dir',
+        default='demo',
+        help='Directory for default scan outputs (default: demo)',
+    )
     parser.add_argument(
         '--internet-facing',
         action='store_true',
@@ -219,12 +233,16 @@ def main():
         stealth=stealth_cfg,
     )
 
-    save_json(args.output, findings)
-    generate_text_report(args.target, findings, out_path='scan_report.txt')
+    default_json, default_txt = default_demo_paths(args.target, args.demo_dir)
+    json_path = args.output or default_json
+    report_path = args.report or default_txt
+
+    save_json(json_path, findings)
+    generate_text_report(args.target, findings, out_path=report_path)
 
     print('Scan complete.')
-    print('JSON output ->', args.output)
-    print('Text report -> scan_report.txt')
+    print('JSON output ->', json_path)
+    print('Text report ->', report_path)
 
 if __name__ == '__main__':
     main()

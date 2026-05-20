@@ -55,15 +55,15 @@ python main.py --target scanme.nmap.org --ports 22 80 --internet-facing --enviro
 ### Custom JSON output path
 
 ```bash
-python main.py --target example.com --output my_scan.json
+python main.py --target example.com --output demo/example.com_scan.json
 ```
 
 ### Outputs
 
 | File | Description |
 |------|-------------|
-| **`--output`** (default `scan_report.json`) | Full structured JSON (see below). |
-| **`scan_report.txt`** | Human-readable report: triage summary, **action queue**, config findings, prioritized CVEs, low-confidence CVE appendix. |
+| **`demo/<target>_scan.json`** (default) | Full structured JSON (see below). Override with `--output`. |
+| **`demo/<target>_report.txt`** (default) | Human-readable report. Override with `--report`. |
 
 ---
 
@@ -76,7 +76,9 @@ python main.py --target example.com --output my_scan.json
 | `--profile` | `common` (~10), `extended` (~36, default), or `full` (~71) ports. |
 | `--port-timeout` | TCP connect timeout per port in seconds (default `1.0`). |
 | `--stealth` | Low-and-slow: sequential ports with random delays, minimal banners, fewer/throttled NVD queries. |
-| `--output` | JSON output file path (default: `scan_report.json`). |
+| `--output` | JSON output path (default: `demo/<target>_scan.json`). |
+| `--report` | Text report path (default: `demo/<target>_report.txt`). |
+| `--demo-dir` | Folder for default outputs (default: `demo`). |
 | `--internet-facing` | Raises priority scores when the asset is treated as internet-exposed. |
 | `--environment` | Context label (e.g. `prod`); `prod` adds a production weight in scoring. |
 

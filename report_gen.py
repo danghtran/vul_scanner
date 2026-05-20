@@ -1,5 +1,9 @@
 import json
-from typing import List
+import re
+from pathlib import Path
+from typing import List, Tuple
+
+DEMO_DIR_NAME = "demo"
 
 
 def _cvss_line(c: dict) -> str:
@@ -369,11 +373,38 @@ def generate_text_report(target, findings, out_path):
         lines.append(f" - Top action queue tier: {r['highest_tier']}")
 
     text = "\n".join(lines)
-    with open(out_path, "w", encoding="utf-8") as f:
+    path = Path(out_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
         f.write(text)
     return text
 
 
+def safe_target_slug(target: str) -> str:
+    raw = (target or "scan").strip()
+    if raw.startswith("http"):
+        from urllib.parse import urlparse
+
+        raw = urlparse(raw).hostname or raw
+    raw = raw.split("@")[-1].split("/")[0]
+    if ":" in raw and not raw.startswith("["):
+        host_part, _, port_part = raw.rpartition(":")
+        if port_part.isdigit():
+            raw = host_part
+    slug = re.sub(r"[^\w.-]+", "_", raw).strip("._")
+    return (slug or "scan")[:80]
+
+
+def default_demo_paths(target: str, demo_dir: str = DEMO_DIR_NAME) -> Tuple[str, str]:
+    """Default JSON and text report paths under demo/."""
+    root = Path(demo_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    slug = safe_target_slug(target)
+    return str(root / f"{slug}_scan.json"), str(root / f"{slug}_report.txt")
+
+
 def save_json(out_path, data):
-    with open(out_path, "w", encoding="utf-8") as jf:
+    path = Path(out_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as jf:
         json.dump(data, jf, indent=2)

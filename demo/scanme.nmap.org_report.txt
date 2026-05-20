@@ -1,0 +1,181 @@
+Scan report for scanme.nmap.org
+============================================================
+
+Triage summary:
+ - Detected products: apache, openssh
+ - NVD CPE queries: 2 (cpe:2.3:a:openbsd:openssh:6.6.1p1:*:*:*:*:*:*:*, cpe:2.3:a:apache:http_server:2.4.7:*:*:*:*:*:*:*)
+ - NVD CPE results: kept 10 of 60 (cap 5/product; dropped version=7, stale/low=1)
+ - NVD API: 2 request(s), cache hits 0, retries 0, errors 0
+ - Configuration findings: 3
+ - CVEs (prioritized): 10
+ - CVEs (low confidence): 0
+ - Installed versions used: openssh 6.6.1p1, apache 2.4.7
+ - High EPSS (percentile >= 0.85): 8
+ - EPSS feed: ok
+ - Action queue by tier: P1: 2, P2: 8, P3: 3
+
+Action queue (config + high-value CVEs):
+ 1. [CONFIG] OpenSSH 6.6.1p1 is end-of-life / unsupported — P2 (high, score 164.0)
+     Upgrade OpenSSH to a vendor-supported release
+     direct observation from scan
+ 2. [CONFIG] Site served over cleartext HTTP without HTTPS in scope — P2 (high, score 161.0)
+     Enable HTTPS and redirect HTTP to HTTPS
+     direct observation from scan
+ 3. [CONFIG] Multiple security headers missing (5) — P3 (medium, score 134.0)
+     Harden HTTP response headers per organizational baseline
+     direct observation from scan
+ 4. CVE-2023-38408 — P1 (score 235.6) EPSS pct 0.99 [high]
+     High EPSS exploitation probability; validate applicability and patch urgently
+     https://nvd.nist.gov/vuln/detail/CVE-2023-38408
+ 5. CVE-2015-5600 — P1 (score 220.0) EPSS pct 0.99 [high]
+     High EPSS exploitation probability; validate applicability and patch urgently
+     https://nvd.nist.gov/vuln/detail/CVE-2015-5600
+ 6. CVE-2016-5387 — P2 (score 215.2) EPSS pct 0.98 [high]
+     High EPSS exploitation probability; validate applicability and patch urgently
+     https://nvd.nist.gov/vuln/detail/CVE-2016-5387
+ 7. CVE-2016-1908 — P2 (score 211.6) EPSS pct 0.85 [high]
+     High EPSS exploitation probability; validate applicability and patch urgently
+     https://nvd.nist.gov/vuln/detail/CVE-2016-1908
+ 8. CVE-2008-3844 — P2 (score 205.6) EPSS pct 0.86 [high]
+     High EPSS exploitation probability; validate applicability and patch urgently
+     https://nvd.nist.gov/vuln/detail/CVE-2008-3844
+ 9. CVE-2014-0226 — P2 (score 199.6) EPSS pct 0.99 [high]
+     High EPSS exploitation probability; validate applicability and patch urgently
+     https://nvd.nist.gov/vuln/detail/CVE-2014-0226
+ 10. CVE-2011-2688 — P2 (score 184.0) EPSS pct 0.91 [high]
+     High EPSS exploitation probability; validate applicability and patch urgently
+     https://nvd.nist.gov/vuln/detail/CVE-2011-2688
+ 11. CVE-2015-3183 — P2 (score 178.0) EPSS pct 0.97 [high]
+     High EPSS exploitation probability; validate applicability and patch urgently
+     https://nvd.nist.gov/vuln/detail/CVE-2015-3183
+ 12. CVE-2016-10012 — P3 (score 139.6) EPSS pct 0.06 [high]
+     Validate affected component version, then patch per vendor advisory
+     https://nvd.nist.gov/vuln/detail/CVE-2016-10012
+ 13. CVE-2007-4723 — P3 (score 136.0) EPSS pct 0.42 [high]
+     Validate affected component version, then patch per vendor advisory
+     https://nvd.nist.gov/vuln/detail/CVE-2007-4723
+
+Configuration findings:
+ - [P3] Multiple security headers missing (5) (medium)
+     Harden HTTP response headers per organizational baseline
+ - [P2] Site served over cleartext HTTP without HTTPS in scope (high)
+     Enable HTTPS and redirect HTTP to HTTPS
+ - [P2] OpenSSH 6.6.1p1 is end-of-life / unsupported (high)
+     Upgrade OpenSSH to a vendor-supported release
+
+Observations:
+ - [tcp-22] tcp_service
+     port: 22
+     parsed: openssh 6.6.1p1
+     banner: SSH-2.0-OpenSSH_6.6.1p1 Ubuntu-2ubuntu2.13
+ - [tcp-80] tcp_service
+     port: 80
+     parsed: apache 2.4.7
+     banner: HTTP/1.1 200 OK Date: Wed, 20 May 2026 02:02:43 GMT Server: Apache/2.4.7 (Ubuntu) Accept-Ranges: bytes Vary: Accept-Encoding Connection: close Transfer-Encoding
+ - [http-headers] http_headers
+ - [dns-host] dns_context
+     IPv4: 45.33.32.156
+     IPv6: 2600:3c01::f03c:91ff:fe18:bb2f
+ - [web-inventory] web_inventory
+     parsed: apache 2.4.7
+     tech: Apache/2.4.7 (Ubuntu), apache, apache 2.4.7
+     redirects: 200 http://scanme.nmap.org/
+
+Port scan:
+ - profile: extended (2 ports probed)
+ - open: 2
+
+Open ports:
+ - 22: open
+   banner: SSH-2.0-OpenSSH_6.6.1p1 Ubuntu-2ubuntu2.13
+ - 80: open
+   banner: HTTP/1.1 200 OK Date: Wed, 20 May 2026 02:02:43 GMT Server: Apache/2.4.7 (Ubuntu) Accept-Ranges: bytes Vary: Accept-Encoding Connection: close Transfer-Encoding: chunked Content-Type: text/html 4c <!DOCTYPE html> <html lang="en"> <head> <title>Go ahead and ScanMe!</title> a7f <meta name="viewport" content="width=device-width,initial-scale=1"> <meta name="theme-color" content="#2A0D45"> <link rel="preload" as="image" href="/images/sitelogo.png" imagesizes="168px" imagesrcset="/images/sitelogo.png, /images/sitelogo-2x.png 2x"> <link rel="preload" as="image" href="/shared/images/nst-icons.svg"> <link rel="stylesheet" href="/shared/css/nst.css?v=2"> <script async src="/shared/js/nst.js?v=2"></script> <link rel="stylesheet" href="/shared/css/nst-foot.css?v=2" media="print" onload="this.media='all'"> <link rel="stylesheet" href="/site.css"> <!--Google Analytics Code--> <link rel="preload" href="https://www.google-analytics.com/analytics.js" as="script"> <script> (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){ (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o), m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m) })(window,document,'script','//www.google-analytics.com/analytics.js','ga'); ga('create', 'UA-11009417-1', 'auto'); ga('send', 'pageview'); </script> <!--END Google Analytics Code--> <META NAME="ROBOTS" CONTENT="NOARCHIVE"> <link rel="shor
+
+TLS:
+ - no TLS info
+
+HTTP headers:
+ - Strict-Transport-Security: None
+ - Content-Security-Policy: None
+ - X-Frame-Options: None
+ - X-Content-Type-Options: None
+ - Referrer-Policy: None
+
+DNS (inventory):
+ - host: scanme.nmap.org
+ - IPv4: 45.33.32.156
+ - IPv6: 2600:3c01::f03c:91ff:fe18:bb2f
+ - asset context: mail=False spf=False dmarc=False
+
+Web inventory (passive):
+ - entry URL: http://scanme.nmap.org/
+ - final URL: http://scanme.nmap.org/
+ - redirect chain: 200 http://scanme.nmap.org/
+ - HTTP status: 200
+ - Server: Apache/2.4.7 (Ubuntu)
+ - tech hints: Apache/2.4.7 (Ubuntu), apache, apache 2.4.7
+ - Set-Cookie count: 0
+ - robots.txt: HTTP 404
+ - security.txt: not found at /.well-known/ or /
+
+CVE matches — prioritized (relevance high/medium or KEV):
+ - CVE-2023-38408 [P1] rel=high ver=likely_affected val=corroborated — CVSS 9.8 | v3.1 | CRITICAL | CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H | EPSS pct 0.99
+     installed openssh 6.6.1p1 falls within CVE affected range (before 9.3p2)
+     NVD CPE match for installed version; installed openssh 6.6.1p1 falls within CVE affected range (before 9.3p2)
+     https://nvd.nist.gov/vuln/detail/CVE-2023-38408
+     The PKCS#11 feature in ssh-agent in OpenSSH before 9.3p2 has an insufficiently trustworthy search path, leading to remote code execution if an agent is forwarded to an attacker-controlled system. (Code in /usr/lib is not necessarily safe for loading into ssh-agent.) NOTE: this is
+ - CVE-2015-5600 [P1] rel=high ver=likely_affected val=corroborated — CVSS 8.5 | v2.0 | AV:N/AC:L/Au:N/C:P/I:N/A:C | EPSS pct 0.99
+     installed openssh 6.6.1p1 falls within CVE affected range (6.9 and earlier)
+     NVD CPE match for installed version; installed openssh 6.6.1p1 falls within CVE affected range (6.9 and earlier)
+     https://nvd.nist.gov/vuln/detail/CVE-2015-5600
+     The kbdint_next_device function in auth2-chall.c in sshd in OpenSSH through 6.9 does not properly restrict the processing of keyboard-interactive devices within a single connection, which makes it easier for remote attackers to conduct brute-force attacks or cause a denial of ser
+ - CVE-2016-5387 [P2] rel=high ver=likely_affected val=corroborated — CVSS 8.1 | v3.1 | HIGH | CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H | EPSS pct 0.98
+     installed apache 2.4.7 falls within CVE affected range (2.4.23 and earlier)
+     NVD CPE match for installed version; installed apache 2.4.7 falls within CVE affected range (2.4.23 and earlier)
+     https://nvd.nist.gov/vuln/detail/CVE-2016-5387
+     The Apache HTTP Server through 2.4.23 follows RFC 3875 section 4.1.18 and therefore does not protect applications from the presence of untrusted client data in the HTTP_PROXY environment variable, which might allow remote attackers to redirect an application's outbound HTTP traff
+ - CVE-2016-1908 [P2] rel=high ver=likely_affected val=corroborated — CVSS 9.8 | v3.1 | CRITICAL | CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H | EPSS pct 0.85
+     installed openssh 6.6.1p1 falls within CVE affected range (before 7.2)
+     NVD CPE match for installed version; installed openssh 6.6.1p1 falls within CVE affected range (before 7.2)
+     https://nvd.nist.gov/vuln/detail/CVE-2016-1908
+     The client in OpenSSH before 7.2 mishandles failed cookie generation for untrusted X11 forwarding and relies on the local X11 server for access-control decisions, which allows remote X11 clients to trigger a fallback and obtain trusted X11 forwarding privileges by leveraging conf
+ - CVE-2008-3844 [P2] rel=high val=corroborated — CVSS 9.3 | v2.0 | AV:N/AC:M/Au:N/C:C/I:C/A:C | EPSS pct 0.86
+     banner or version evidence aligns with CVE affected product
+     https://nvd.nist.gov/vuln/detail/CVE-2008-3844
+     Certain Red Hat Enterprise Linux (RHEL) 4 and 5 packages for OpenSSH, as signed in August 2008 using a legitimate Red Hat GPG key, contain an externally introduced modification (Trojan Horse) that allows the package authors to have an unknown impact.  NOTE: since the malicious pa
+ - CVE-2014-0226 [P2] rel=high ver=likely_affected val=corroborated — CVSS 6.8 | v2.0 | AV:N/AC:M/Au:N/C:P/I:P/A:P | EPSS pct 0.99
+     installed apache 2.4.7 falls within CVE affected range (before 2.4.10)
+     NVD CPE match for installed version; installed apache 2.4.7 falls within CVE affected range (before 2.4.10)
+     https://nvd.nist.gov/vuln/detail/CVE-2014-0226
+     Race condition in the mod_status module in the Apache HTTP Server before 2.4.10 allows remote attackers to cause a denial of service (heap-based buffer overflow), or possibly obtain sensitive credential information or execute arbitrary code, via a crafted request that triggers im
+ - CVE-2011-2688 [P2] rel=high ver=likely_affected val=corroborated — CVSS 7.5 | v2.0 | AV:N/AC:L/Au:N/C:P/I:P/A:P | EPSS pct 0.91
+     installed apache 2.4.7 falls within CVE affected range (3.2.5 and earlier)
+     NVD CPE match for installed version; installed apache 2.4.7 falls within CVE affected range (3.2.5 and earlier)
+     https://nvd.nist.gov/vuln/detail/CVE-2011-2688
+     SQL injection vulnerability in mysql/mysql-auth.pl in the mod_authnz_external module 3.2.5 and earlier for the Apache HTTP Server allows remote attackers to execute arbitrary SQL commands via the user field.
+ - CVE-2015-3183 [P2] rel=high ver=likely_affected val=corroborated — CVSS 5.0 | v2.0 | AV:N/AC:L/Au:N/C:N/I:P/A:N | EPSS pct 0.97
+     installed apache 2.4.7 falls within CVE affected range (before 2.4.14)
+     NVD CPE match for installed version; installed apache 2.4.7 falls within CVE affected range (before 2.4.14)
+     https://nvd.nist.gov/vuln/detail/CVE-2015-3183
+     The chunked transfer coding implementation in the Apache HTTP Server before 2.4.14 does not properly parse chunk headers, which allows remote attackers to conduct HTTP request smuggling attacks via a crafted request, related to mishandling of large chunk-size values and invalid c
+ - CVE-2016-10012 [P3] rel=high ver=likely_affected val=corroborated — CVSS 7.8 | v3.0 | HIGH | CVSS:3.0/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H | EPSS pct 0.06
+     installed openssh 6.6.1p1 falls within CVE affected range (before 7.4)
+     NVD CPE match for installed version; installed openssh 6.6.1p1 falls within CVE affected range (before 7.4)
+     https://nvd.nist.gov/vuln/detail/CVE-2016-10012
+     The shared memory manager (associated with pre-authentication compression) in sshd in OpenSSH before 7.4 does not ensure that a bounds check is enforced by all compilers, which might allows local users to gain privileges by leveraging access to a sandboxed privilege-separation pr
+ - CVE-2007-4723 [P3] rel=high val=corroborated — CVSS 7.5 | v2.0 | AV:N/AC:L/Au:N/C:P/I:P/A:P | EPSS pct 0.42
+     banner or version evidence aligns with CVE affected product
+     https://nvd.nist.gov/vuln/detail/CVE-2007-4723
+     Directory traversal vulnerability in Ragnarok Online Control Panel 4.3.4a, when the Apache HTTP Server is used, allows remote attackers to bypass authentication via directory traversal sequences in a URI that ends with the name of a publicly available page, as demonstrated by a "
+
+CVE matches — low confidence (0 total, showing up to 10):
+ - None
+
+AI suggestions (advisory only):
+ - LLM output is advisory-only; not used for scoring or validation.
+ - Full model output is in JSON under `ai_suggestions.data`.
+
+Summary:
+ - Total NVD keyword hits: 10
+ - Highest CVSS (prioritized subset): 9.8
+ - Top action queue tier: P2
